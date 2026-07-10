@@ -1,6 +1,6 @@
 {
   "name": "@andrewpopov/webhook-kit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Framework-agnostic outbound webhook delivery: HMAC-signed `${timestamp}.${body}` with sha256= + X-Webhook-Timestamp headers, fire-time SSRF re-check, per-attempt timeout, redirect: manual, and a receiver-side verifier.",
   "author": "Andrew Popov",
   "license": "MIT",

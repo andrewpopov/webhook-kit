@@ -111,8 +111,10 @@ export interface DeliverOptions {
    * Fire-time URL safety check (SSRF guard). If it throws/rejects, the target is
    * SKIPPED (reported with `skipped: true`), not delivered. Inject the app's own
    * guard — a DNS rebind after registration is why this must run per attempt.
+   * Only whether it throws matters; any return value is awaited and ignored, so
+   * guards that return the parsed URL (or nothing) both fit.
    */
-  assertSafeUrl?: (url: string) => void | Promise<void>;
+  assertSafeUrl?: (url: string) => unknown;
   timeoutMs?: number;
   /** Override fetch (tests / non-global environments). Defaults to global fetch. */
   fetchImpl?: typeof fetch;
