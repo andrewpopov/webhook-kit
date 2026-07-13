@@ -2,10 +2,11 @@
  * @andrewpopov/webhook-kit — framework-agnostic outbound webhook delivery.
  *
  * Owns the drift-prone core that cairn and bewks had independently reimplemented:
- * HMAC signing over `${timestamp}.${body}`, the `sha256=` + `X-Webhook-Timestamp`
- * headers, a fire-time SSRF re-check, per-attempt timeout, `redirect: 'manual'`,
- * and error isolation. The body shape, the SSRF guard, and logging are injected,
- * so each consumer keeps its exact wire contract.
+ * HMAC signing over `${timestamp}.${deliveryId}.${body}`, `sha256=`, timestamp,
+ * and delivery-ID headers, a fire-time SSRF re-check, per-attempt timeout,
+ * `redirect: 'manual'`, and error isolation. The body shape, the SSRF guard,
+ * replay storage, and logging are injected, so each consumer keeps its exact
+ * wire contract.
  */
 export declare const SIGNATURE_HEADER = "X-Webhook-Signature";
 export declare const TIMESTAMP_HEADER = "X-Webhook-Timestamp";
@@ -36,8 +37,9 @@ export interface BuildHeadersOptions {
 }
 /**
  * Build signed request headers for a delivery, returning the unix-seconds
- * timestamp used (so the caller can log/persist it). When `secret` is falsy only
- * `Content-Type` is set — keep every webhook secret-backed so delivery is signed.
+ * timestamp and delivery ID used (so the caller can log/persist them). When
+ * `secret` is falsy only `Content-Type` is set — keep every webhook secret-backed
+ * so delivery is signed.
  */
 export declare function buildSignedHeaders(secret: string | null | undefined, body: string, options?: BuildHeadersOptions): {
     headers: Record<string, string>;
@@ -56,9 +58,10 @@ export interface VerifyParams {
 }
 /**
  * Receiver-side verification. Returns true only when the signature matches
- * `` `${timestamp}.${rawBody}` `` (constant-time) AND the timestamp is within
- * `toleranceSec` of now — the freshness window that makes a captured delivery
- * unreplayable. Use this to verify inbound webhooks signed by this library.
+ * the legacy two-part or current delivery-ID-bound signature (constant-time) AND
+ * the timestamp is within `toleranceSec` of now. This function alone does not
+ * claim the delivery ID and therefore cannot prevent a replay within that window;
+ * use `verifyWebhookDelivery` for new receivers.
  */
 export declare function verifyWebhookSignature(params: VerifyParams): boolean;
 /** Store must atomically reserve an id until expiry, returning false when it was already seen. */
