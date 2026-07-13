@@ -9,6 +9,7 @@
  */
 export declare const SIGNATURE_HEADER = "X-Webhook-Signature";
 export declare const TIMESTAMP_HEADER = "X-Webhook-Timestamp";
+export declare const DELIVERY_ID_HEADER = "X-Webhook-Delivery-Id";
 export declare const DEFAULT_TIMEOUT_MS = 10000;
 export declare const DEFAULT_TOLERANCE_SEC = 300;
 /** Generate a webhook signing secret (256-bit, hex-encoded). */
@@ -24,10 +25,14 @@ export declare function resolveSecretRotation(input: string | null | undefined):
 export declare function matchesEvent(subscribedEvents: readonly string[], event: string): boolean;
 /** Compute the `sha256=<hex>` signature over `` `${timestamp}.${body}` ``. */
 export declare function signWebhookBody(secret: string, timestamp: string, body: string): string;
+/** Compute a signature bound to a unique delivery id as well as timestamp and body. */
+export declare function signWebhookDelivery(secret: string, timestamp: string, deliveryId: string, body: string): string;
 export interface BuildHeadersOptions {
     /** Clock source (unix ms), for tests. Defaults to `Date.now`. */
     now?: () => number;
     contentType?: string;
+    /** Deterministic seam for tests or a caller-owned idempotency key. */
+    deliveryId?: string;
 }
 /**
  * Build signed request headers for a delivery, returning the unix-seconds
@@ -37,12 +42,14 @@ export interface BuildHeadersOptions {
 export declare function buildSignedHeaders(secret: string | null | undefined, body: string, options?: BuildHeadersOptions): {
     headers: Record<string, string>;
     timestamp: string;
+    deliveryId: string;
 };
 export interface VerifyParams {
     secret: string;
     rawBody: string;
     signatureHeader: string | null | undefined;
     timestampHeader: string | null | undefined;
+    deliveryIdHeader?: string | null | undefined;
     /** Reject deliveries whose timestamp is further than this from now. Default 300s. */
     toleranceSec?: number;
     now?: () => number;
@@ -54,6 +61,18 @@ export interface VerifyParams {
  * unreplayable. Use this to verify inbound webhooks signed by this library.
  */
 export declare function verifyWebhookSignature(params: VerifyParams): boolean;
+/** Store must atomically reserve an id until expiry, returning false when it was already seen. */
+export interface WebhookReplayStore {
+    claim(deliveryId: string, expiresAt: Date): Promise<boolean> | boolean;
+}
+/**
+ * Recommended receiver API: verifies a delivery-id-bound signature and then
+ * atomically claims that id. A replay inside the timestamp tolerance is denied.
+ */
+export declare function verifyWebhookDelivery(params: VerifyParams & {
+    deliveryIdHeader: string | null | undefined;
+    replayStore: WebhookReplayStore;
+}): Promise<boolean>;
 export interface WebhookTarget {
     url: string;
     secret?: string | null;
@@ -84,6 +103,7 @@ export type UnsafeDeliverOptions = Omit<DeliverOptions, 'assertSafeUrl'> & {
 export interface DeliveryResult {
     url: string;
     id?: string;
+    deliveryId?: string;
     ok: boolean;
     status?: number;
     /** True when the SSRF guard rejected the URL and delivery was not attempted. */
