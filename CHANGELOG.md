@@ -8,6 +8,7 @@
   rejected within the freshness window.
 - Keep `signWebhookBody` / `verifyWebhookSignature` for legacy protocol
   compatibility, explicitly without replay protection.
+- Upgrade the Vitest development toolchain to a version with no known advisories.
 
 ## 1.0.0
 
