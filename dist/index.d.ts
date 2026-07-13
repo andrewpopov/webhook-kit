@@ -68,13 +68,19 @@ export interface DeliverOptions {
      * Only whether it throws matters; any return value is awaited and ignored, so
      * guards that return the parsed URL (or nothing) both fit.
      */
-    assertSafeUrl?: (url: string) => unknown;
+    assertSafeUrl: (url: string) => unknown;
     timeoutMs?: number;
     /** Override fetch (tests / non-global environments). Defaults to global fetch. */
     fetchImpl?: typeof fetch;
     now?: () => number;
     contentType?: string;
+    /** Maximum simultaneous requests for `deliverWebhooks`. Default 8. */
+    concurrency?: number;
 }
+/** Explicit opt-out for migrations that cannot yet provide a signing secret or SSRF guard. */
+export type UnsafeDeliverOptions = Omit<DeliverOptions, 'assertSafeUrl'> & {
+    assertSafeUrl?: (url: string) => unknown;
+};
 export interface DeliveryResult {
     url: string;
     id?: string;
@@ -89,6 +95,11 @@ export interface DeliveryResult {
  * transport failure comes back in the result. `redirect: 'manual'` ensures a 3xx
  * cannot bounce the request past the SSRF guard to an unvetted host.
  */
-export declare function deliverWebhook(target: WebhookTarget, body: string, options?: DeliverOptions): Promise<DeliveryResult>;
-/** Deliver to many targets in parallel. Never rejects; one result per target. */
-export declare function deliverWebhooks(targets: readonly WebhookTarget[], body: string, options?: DeliverOptions): Promise<DeliveryResult[]>;
+export declare function deliverWebhook(target: WebhookTarget, body: string, options: DeliverOptions): Promise<DeliveryResult>;
+/**
+ * Permissive migration escape hatch. It may send without a signing secret or
+ * SSRF guard, so never use it for a new untrusted webhook integration.
+ */
+export declare function deliverWebhookUnsafe(target: WebhookTarget, body: string, options?: UnsafeDeliverOptions): Promise<DeliveryResult>;
+/** Deliver to many targets with bounded concurrency. Never rejects; one result per target. */
+export declare function deliverWebhooks(targets: readonly WebhookTarget[], body: string, options: DeliverOptions): Promise<DeliveryResult[]>;

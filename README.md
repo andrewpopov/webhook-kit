@@ -3,12 +3,14 @@
 Framework-agnostic **outbound webhook delivery** for Node services. Owns the
 security-sensitive core that repos kept re-implementing and drifting on:
 
-- HMAC-SHA256 signing over `` `${timestamp}.${body}` `` (replay-resistant) with
+- Required HMAC-SHA256 signing over `` `${timestamp}.${body}` `` with
   `X-Webhook-Signature: sha256=<hex>` + `X-Webhook-Timestamp` headers.
-- A **fire-time SSRF re-check** hook — the app injects its own URL guard, run per
-  attempt so a DNS rebind after registration can't reach an internal host.
+- A required **fire-time SSRF re-check** hook — the app injects its own URL
+  guard, run per attempt. The guard must use a pinned transport for full DNS
+  rebinding protection.
 - Per-attempt timeout and `redirect: 'manual'` (a 3xx can't bounce past the guard).
-- Error isolation: delivery never throws; failures come back in the result.
+- Bounded fan-out concurrency and error isolation: delivery failures come back
+  in the result.
 - A matching **receiver-side verifier** so subscribers (and your tests) can
   verify what this library signs, with a freshness window.
 
@@ -17,7 +19,7 @@ Zero runtime dependencies — Node `crypto` and the global `fetch` (Node ≥ 20)
 ## Install
 
 ```
-npm install github:andrewpopov/webhook-kit#v0.1.0
+npm install github:andrewpopov/webhook-kit#v0.1.2
 ```
 
 ## Sending
@@ -36,6 +38,7 @@ async function fire(event: string, payload: Record<string, unknown>) {
   const results = await deliverWebhooks(targets, body, {
     assertSafeUrl: (url) => assertPublicHttpUrl(url), // your SSRF guard; throw to skip
     timeoutMs: 10_000,
+    concurrency: 8,
   });
 
   for (const r of results) {
@@ -70,8 +73,9 @@ app.post('/hook', (req, res) => {
 
 | Export | Purpose |
 |---|---|
-| `deliverWebhook(target, body, opts)` | Deliver one signed webhook; never throws. |
-| `deliverWebhooks(targets, body, opts)` | Deliver many in parallel; one `DeliveryResult` each. |
+| `deliverWebhook(target, body, opts)` | Deliver one signed, fire-time guarded webhook; never sends if either control is absent. |
+| `deliverWebhooks(targets, body, opts)` | Deliver many with bounded concurrency; one `DeliveryResult` each. |
+| `deliverWebhookUnsafe(target, body, opts?)` | Explicit migration-only escape hatch for unsigned or unguarded delivery. |
 | `buildSignedHeaders(secret, body, opts)` | Signed headers + the timestamp used. |
 | `signWebhookBody(secret, timestamp, body)` | The `sha256=<hex>` signature string. |
 | `verifyWebhookSignature(params)` | Receiver-side verify: constant-time + freshness window. |
@@ -79,7 +83,7 @@ app.post('/hook', (req, res) => {
 | `generateWebhookSecret()` | 256-bit hex signing secret. |
 | `resolveSecretRotation(input)` | Always-signed secret update (clear → rotate, never remove). |
 
-`DeliverOptions`: `assertSafeUrl`, `timeoutMs` (default 10000), `fetchImpl`, `now`, `contentType`.
+`DeliverOptions`: required `assertSafeUrl`, `timeoutMs` (default 10000), `fetchImpl`, `now`, `contentType`, and `concurrency` (default 8). `WebhookTarget.secret` is required for a safe delivery; a missing secret returns a skipped result without sending.
 
 ## Signature scheme
 
@@ -89,8 +93,19 @@ X-Webhook-Signature: sha256=HMAC_SHA256(secret, `${X-Webhook-Timestamp}.${rawBod
 ```
 
 A receiver reconstructs `` `${X-Webhook-Timestamp}.${rawBody}` ``, compares the HMAC
-constant-time, and rejects deliveries outside its freshness window. Because the
-timestamp is bound into the signature, a captured delivery cannot be replayed.
+constant-time, and rejects deliveries outside its freshness window. This bounds
+staleness but **does not prevent replay inside the tolerance window**; receivers
+that need exactly-once acceptance must atomically persist a delivery nonce or
+idempotency key. That durable replay-store contract is intentionally application
+owned in this release.
+
+## Verify locally
+
+```bash
+npm ci
+npm run verify
+npm audit --omit=dev --audit-level=high
+```
 
 ## Standards
 

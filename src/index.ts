@@ -114,13 +114,20 @@ export interface DeliverOptions {
    * Only whether it throws matters; any return value is awaited and ignored, so
    * guards that return the parsed URL (or nothing) both fit.
    */
-  assertSafeUrl?: (url: string) => unknown;
+  assertSafeUrl: (url: string) => unknown;
   timeoutMs?: number;
   /** Override fetch (tests / non-global environments). Defaults to global fetch. */
   fetchImpl?: typeof fetch;
   now?: () => number;
   contentType?: string;
+  /** Maximum simultaneous requests for `deliverWebhooks`. Default 8. */
+  concurrency?: number;
 }
+
+/** Explicit opt-out for migrations that cannot yet provide a signing secret or SSRF guard. */
+export type UnsafeDeliverOptions = Omit<DeliverOptions, 'assertSafeUrl'> & {
+  assertSafeUrl?: (url: string) => unknown;
+};
 
 export interface DeliveryResult {
   url: string;
@@ -136,6 +143,24 @@ function asError(e: unknown): Error {
   return e instanceof Error ? e : new Error(String(e));
 }
 
+function redactUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return '<invalid URL>';
+  }
+}
+
+function redactError(error: unknown, rawUrl: string): Error {
+  const message = asError(error).message.split(rawUrl).join(redactUrl(rawUrl));
+  return new Error(message);
+}
+
 /**
  * Deliver one signed webhook. Never throws — a guard rejection, timeout, or
  * transport failure comes back in the result. `redirect: 'manual'` ensures a 3xx
@@ -144,15 +169,43 @@ function asError(e: unknown): Error {
 export async function deliverWebhook(
   target: WebhookTarget,
   body: string,
-  options: DeliverOptions = {},
+  options: DeliverOptions,
 ): Promise<DeliveryResult> {
-  const base: DeliveryResult = { url: target.url, id: target.id, ok: false };
+  return deliver(target, body, options, true);
+}
+
+/**
+ * Permissive migration escape hatch. It may send without a signing secret or
+ * SSRF guard, so never use it for a new untrusted webhook integration.
+ */
+export async function deliverWebhookUnsafe(
+  target: WebhookTarget,
+  body: string,
+  options: UnsafeDeliverOptions = {},
+): Promise<DeliveryResult> {
+  return deliver(target, body, options, false);
+}
+
+async function deliver(
+  target: WebhookTarget,
+  body: string,
+  options: UnsafeDeliverOptions,
+  requireSafeDelivery: boolean,
+): Promise<DeliveryResult> {
+  const base: DeliveryResult = { url: redactUrl(target.url), id: target.id, ok: false };
+
+  if (requireSafeDelivery && !target.secret) {
+    return { ...base, skipped: true, error: new Error('Webhook signing secret is required') };
+  }
+  if (requireSafeDelivery && !options.assertSafeUrl) {
+    return { ...base, skipped: true, error: new Error('Webhook URL guard is required') };
+  }
 
   if (options.assertSafeUrl) {
     try {
       await options.assertSafeUrl(target.url);
     } catch (error) {
-      return { ...base, skipped: true, error: asError(error) };
+      return { ...base, skipped: true, error: redactError(error, target.url) };
     }
   }
 
@@ -173,17 +226,32 @@ export async function deliverWebhook(
     });
     return { ...base, ok: res.ok, status: res.status };
   } catch (error) {
-    return { ...base, error: asError(error) };
+    return { ...base, error: redactError(error, target.url) };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-/** Deliver to many targets in parallel. Never rejects; one result per target. */
+/** Deliver to many targets with bounded concurrency. Never rejects; one result per target. */
 export async function deliverWebhooks(
   targets: readonly WebhookTarget[],
   body: string,
-  options: DeliverOptions = {},
+  options: DeliverOptions,
 ): Promise<DeliveryResult[]> {
-  return Promise.all(targets.map((t) => deliverWebhook(t, body, options)));
+  const concurrency = options.concurrency ?? 8;
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new TypeError('concurrency must be a positive integer');
+  }
+
+  const results = new Array<DeliveryResult>(targets.length);
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (nextIndex < targets.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await deliverWebhook(targets[index], body, options);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, worker));
+  return results;
 }

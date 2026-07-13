@@ -1,6 +1,6 @@
 {
   "name": "@andrewpopov/webhook-kit",
-  "version": "0.1.2",
+  "version": "1.0.0",
   "description": "Framework-agnostic outbound webhook delivery: HMAC-signed `${timestamp}.${body}` with sha256= + X-Webhook-Timestamp headers, fire-time SSRF re-check, per-attempt timeout, redirect: manual, and a receiver-side verifier.",
   "author": "Andrew Popov",
   "license": "MIT",
@@ -24,7 +24,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify:pack": "node scripts/verify-pack.mjs"
+    "verify:pack": "node scripts/verify-pack.mjs",
+    "verify": "npm run typecheck && npm test && npm run build && npm run verify:pack"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
