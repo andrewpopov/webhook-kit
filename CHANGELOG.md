@@ -2,6 +2,7 @@
 
 ## 1.0.1
 
+- Add public contribution, support, and private vulnerability-reporting policies.
 - Bind all newly sent webhook signatures to a unique `X-Webhook-Delivery-Id`.
 - Add `verifyWebhookDelivery`, which validates the delivery signature/freshness
   and invokes a consumer-provided atomic replay-store claim. A duplicate ID is

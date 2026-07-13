@@ -4,6 +4,9 @@
   "description": "Framework-agnostic outbound webhook delivery with signed delivery IDs, replay-store verification, fire-time SSRF re-check, per-attempt timeout, and redirect: manual.",
   "author": "Andrew Popov",
   "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/andrewpopov/webhook-kit.git" },
+  "bugs": { "url": "https://github.com/andrewpopov/webhook-kit/issues" },
+  "homepage": "https://github.com/andrewpopov/webhook-kit#readme",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
