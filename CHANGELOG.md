@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2
+
+Fix — expose `./package.json` in the `exports` map. Without it,
+`require('@andrewpopov/webhook-kit/package.json')` threw
+`ERR_PACKAGE_PATH_NOT_EXPORTED` — which broke the standards' own documented way of
+verifying an INSTALLED version, the guard against the `github:` re-resolve trap.
+
+No runtime change.
+
 ## 0.1.1
 
 - `DeliverOptions.assertSafeUrl` now accepts a guard returning any value (`(url) => unknown`), not just `void`/`Promise<void>`. Only whether it throws matters, so guards that return the parsed URL fit without a wrapper. Surfaced adopting bewks, whose SSRF guard returns the parsed `URL`.
