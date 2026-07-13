@@ -3,8 +3,9 @@
 Framework-agnostic **outbound webhook delivery** for Node services. Owns the
 security-sensitive core that repos kept re-implementing and drifting on:
 
-- Required HMAC-SHA256 signing over `` `${timestamp}.${body}` `` with
-  `X-Webhook-Signature: sha256=<hex>` + `X-Webhook-Timestamp` headers.
+- Required HMAC-SHA256 signing over `` `${timestamp}.${deliveryId}.${body}` ``
+  with `X-Webhook-Signature: sha256=<hex>`, `X-Webhook-Timestamp`, and a unique
+  `X-Webhook-Delivery-Id` header.
 - A required **fire-time SSRF re-check** hook — the app injects its own URL
   guard, run per attempt. The guard must use a pinned transport for full DNS
   rebinding protection.
@@ -19,7 +20,7 @@ Zero runtime dependencies — Node `crypto` and the global `fetch` (Node ≥ 20)
 ## Install
 
 ```
-npm install github:andrewpopov/webhook-kit#v0.1.2
+npm install github:andrewpopov/webhook-kit#v1.0.0
 ```
 
 ## Sending
@@ -54,14 +55,16 @@ contract and logging are preserved — only the signing/transport core is shared
 ## Receiving (subscriber side)
 
 ```ts
-import { verifyWebhookSignature } from '@andrewpopov/webhook-kit';
+import { verifyWebhookDelivery } from '@andrewpopov/webhook-kit';
 
 app.post('/hook', (req, res) => {
-  const ok = verifyWebhookSignature({
+  const ok = await verifyWebhookDelivery({
     secret: MY_SECRET,
     rawBody: req.rawBody,                       // the exact bytes received
     signatureHeader: req.header('X-Webhook-Signature'),
     timestampHeader: req.header('X-Webhook-Timestamp'),
+    deliveryIdHeader: req.header('X-Webhook-Delivery-Id'),
+    replayStore: deliveries,                   // atomic `claim(id, expiresAt)` store
     toleranceSec: 300,                          // reject deliveries older than 5 min
   });
   if (!ok) return res.status(401).end();
@@ -76,9 +79,10 @@ app.post('/hook', (req, res) => {
 | `deliverWebhook(target, body, opts)` | Deliver one signed, fire-time guarded webhook; never sends if either control is absent. |
 | `deliverWebhooks(targets, body, opts)` | Deliver many with bounded concurrency; one `DeliveryResult` each. |
 | `deliverWebhookUnsafe(target, body, opts?)` | Explicit migration-only escape hatch for unsigned or unguarded delivery. |
-| `buildSignedHeaders(secret, body, opts)` | Signed headers + the timestamp used. |
-| `signWebhookBody(secret, timestamp, body)` | The `sha256=<hex>` signature string. |
-| `verifyWebhookSignature(params)` | Receiver-side verify: constant-time + freshness window. |
+| `buildSignedHeaders(secret, body, opts)` | Signed headers + timestamp and unique delivery ID. |
+| `signWebhookDelivery(secret, timestamp, deliveryId, body)` | Current `sha256=<hex>` signature string. |
+| `verifyWebhookDelivery(params)` | Recommended receiver-side verify: signature, freshness, and atomic replay claim. |
+| `verifyWebhookSignature(params)` | Legacy signature/freshness verification only; no replay claim. |
 | `matchesEvent(subscribed, event)` | Event match honoring the `*` wildcard. |
 | `generateWebhookSecret()` | 256-bit hex signing secret. |
 | `resolveSecretRotation(input)` | Always-signed secret update (clear → rotate, never remove). |
@@ -89,15 +93,20 @@ app.post('/hook', (req, res) => {
 
 ```
 X-Webhook-Timestamp: <unix-seconds>
-X-Webhook-Signature: sha256=HMAC_SHA256(secret, `${X-Webhook-Timestamp}.${rawBody}`)
+X-Webhook-Delivery-Id: <unique-id>
+X-Webhook-Signature: sha256=HMAC_SHA256(secret, `${X-Webhook-Timestamp}.${X-Webhook-Delivery-Id}.${rawBody}`)
 ```
 
-A receiver reconstructs `` `${X-Webhook-Timestamp}.${rawBody}` ``, compares the HMAC
-constant-time, and rejects deliveries outside its freshness window. This bounds
-staleness but **does not prevent replay inside the tolerance window**; receivers
-that need exactly-once acceptance must atomically persist a delivery nonce or
-idempotency key. That durable replay-store contract is intentionally application
-owned in this release.
+A receiver reconstructs the three-part input, compares the HMAC constant-time,
+and rejects deliveries outside its freshness window. Call `verifyWebhookDelivery`
+with a replay store whose `claim(deliveryId, expiresAt)` operation is atomic: it
+must return `false` when the ID was already claimed, and retain a claim through
+`expiresAt`. This package provides the protocol and fail-closed contract; storage
+selection remains application-owned.
+
+`signWebhookBody` and `verifyWebhookSignature` remain for legacy wire
+compatibility. They check only signature and freshness, so they do not provide
+replay prevention.
 
 ## Verify locally
 

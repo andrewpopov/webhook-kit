@@ -5,13 +5,16 @@ import {
   resolveSecretRotation,
   matchesEvent,
   signWebhookBody,
+  signWebhookDelivery,
   buildSignedHeaders,
   verifyWebhookSignature,
+  verifyWebhookDelivery,
   deliverWebhook,
   deliverWebhookUnsafe,
   deliverWebhooks,
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
+  DELIVERY_ID_HEADER,
 } from '../index';
 
 describe('generateWebhookSecret', () => {
@@ -56,11 +59,13 @@ describe('signWebhookBody', () => {
 });
 
 describe('buildSignedHeaders', () => {
-  it('emits signature + timestamp headers when a secret is present', () => {
-    const { headers, timestamp } = buildSignedHeaders('sec', '{}', { now: () => 1700000000_000 });
+  it('emits a delivery-id-bound signature, timestamp, and id when a secret is present', () => {
+    const { headers, timestamp, deliveryId } = buildSignedHeaders('sec', '{}', { now: () => 1700000000_000, deliveryId: 'delivery-1' });
     expect(timestamp).toBe('1700000000');
     expect(headers[TIMESTAMP_HEADER]).toBe('1700000000');
-    expect(headers[SIGNATURE_HEADER]).toBe(signWebhookBody('sec', '1700000000', '{}'));
+    expect(deliveryId).toBe('delivery-1');
+    expect(headers[DELIVERY_ID_HEADER]).toBe('delivery-1');
+    expect(headers[SIGNATURE_HEADER]).toBe(signWebhookDelivery('sec', '1700000000', 'delivery-1', '{}'));
     expect(headers['Content-Type']).toBe('application/json');
   });
   it('omits signature headers when no secret', () => {
@@ -83,6 +88,7 @@ describe('verifyWebhookSignature (receiver side)', () => {
         rawBody: body,
         signatureHeader: headers[SIGNATURE_HEADER],
         timestampHeader: headers[TIMESTAMP_HEADER],
+        deliveryIdHeader: headers[DELIVERY_ID_HEADER],
         now,
       }),
     ).toBe(true);
@@ -97,6 +103,7 @@ describe('verifyWebhookSignature (receiver side)', () => {
         rawBody: body + 'x',
         signatureHeader: headers[SIGNATURE_HEADER],
         timestampHeader: headers[TIMESTAMP_HEADER],
+        deliveryIdHeader: headers[DELIVERY_ID_HEADER],
         now,
       }),
     ).toBe(false);
@@ -112,6 +119,7 @@ describe('verifyWebhookSignature (receiver side)', () => {
         rawBody: body,
         signatureHeader: headers[SIGNATURE_HEADER],
         timestampHeader: headers[TIMESTAMP_HEADER],
+        deliveryIdHeader: headers[DELIVERY_ID_HEADER],
         toleranceSec: 300,
         now: () => 1700000000_000 + 600_000,
       }),
@@ -133,9 +141,32 @@ describe('verifyWebhookSignature (receiver side)', () => {
         rawBody: body,
         signatureHeader: headers[SIGNATURE_HEADER],
         timestampHeader: headers[TIMESTAMP_HEADER],
+        deliveryIdHeader: headers[DELIVERY_ID_HEADER],
         now,
       }),
     ).toBe(false);
+  });
+
+  it('rejects a replay inside the timestamp tolerance through an atomic replay store', async () => {
+    const now = () => 1700000000_000;
+    const { headers } = buildSignedHeaders(secret, body, { now, deliveryId: 'delivery-1' });
+    const claimed = new Set<string>();
+    const replayStore = { claim: async (id: string) => {
+      if (claimed.has(id)) return false;
+      claimed.add(id);
+      return true;
+    } };
+    const params = {
+      secret,
+      rawBody: body,
+      signatureHeader: headers[SIGNATURE_HEADER],
+      timestampHeader: headers[TIMESTAMP_HEADER],
+      deliveryIdHeader: headers[DELIVERY_ID_HEADER],
+      replayStore,
+      now,
+    };
+    await expect(verifyWebhookDelivery(params)).resolves.toBe(true);
+    await expect(verifyWebhookDelivery(params)).resolves.toBe(false);
   });
 });
 
@@ -153,12 +184,13 @@ describe('deliverWebhook', () => {
       { fetchImpl, now: () => 1700000000_000, assertSafeUrl: () => undefined },
     );
 
-    expect(res).toMatchObject({ url: 'https://example.com/hook', id: 'w1', ok: true, status: 200 });
+    expect(res).toMatchObject({ url: 'https://example.com/hook', id: 'w1', deliveryId: expect.any(String), ok: true, status: 200 });
     const [, init] = calls[0];
     expect(init.method).toBe('POST');
     expect(init.redirect).toBe('manual');
     const h = init.headers as Record<string, string>;
-    expect(h[SIGNATURE_HEADER]).toBe(signWebhookBody('sec', '1700000000', '{"x":1}'));
+    expect(h[DELIVERY_ID_HEADER]).toBe(res.deliveryId);
+    expect(h[SIGNATURE_HEADER]).toBe(signWebhookDelivery('sec', '1700000000', res.deliveryId!, '{"x":1}'));
     expect(h[TIMESTAMP_HEADER]).toBe('1700000000');
   });
 

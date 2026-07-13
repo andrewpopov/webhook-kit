@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1
+
+- Bind all newly sent webhook signatures to a unique `X-Webhook-Delivery-Id`.
+- Add `verifyWebhookDelivery`, which validates the delivery signature/freshness
+  and invokes a consumer-provided atomic replay-store claim. A duplicate ID is
+  rejected within the freshness window.
+- Keep `signWebhookBody` / `verifyWebhookSignature` for legacy protocol
+  compatibility, explicitly without replay protection.
+
 ## 1.0.0
 
 **Breaking security release.** `deliverWebhook` and `deliverWebhooks` now require
