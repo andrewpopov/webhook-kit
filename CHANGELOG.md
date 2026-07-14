@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.1
+
+- Add public contribution, support, and private vulnerability-reporting policies.
+- Bind all newly sent webhook signatures to a unique `X-Webhook-Delivery-Id`.
+- Add `verifyWebhookDelivery`, which validates the delivery signature/freshness
+  and invokes a consumer-provided atomic replay-store claim. A duplicate ID is
+  rejected within the freshness window.
+- Keep `signWebhookBody` / `verifyWebhookSignature` for legacy protocol
+  compatibility, explicitly without replay protection.
+- Upgrade the Vitest development toolchain to a version with no known advisories.
+
+## 1.0.0
+
+**Breaking security release.** `deliverWebhook` and `deliverWebhooks` now require
+both a non-empty target secret and an `assertSafeUrl` callback. A missing control
+produces a skipped result and sends nothing. The old permissive behavior remains
+available only as explicitly named `deliverWebhookUnsafe` for migration.
+
+- Bound fan-out delivery via `concurrency` (default `8`) instead of issuing an
+  unbounded request burst.
+- Redact URL credentials, query strings, and fragments from delivery results and
+  propagated guard/transport errors.
+- Correct receiver documentation: timestamp freshness alone does not stop a
+  captured request from being replayed within its tolerance window.
+- Add `npm run verify` for the local release gate.
+
 ## 0.1.2
 
 Fix — expose `./package.json` in the `exports` map. Without it,

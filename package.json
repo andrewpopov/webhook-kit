@@ -1,9 +1,12 @@
 {
   "name": "@andrewpopov/webhook-kit",
-  "version": "0.1.2",
-  "description": "Framework-agnostic outbound webhook delivery: HMAC-signed `${timestamp}.${body}` with sha256= + X-Webhook-Timestamp headers, fire-time SSRF re-check, per-attempt timeout, redirect: manual, and a receiver-side verifier.",
+  "version": "1.0.1",
+  "description": "Framework-agnostic outbound webhook delivery with signed delivery IDs, replay-store verification, fire-time SSRF re-check, per-attempt timeout, and redirect: manual.",
   "author": "Andrew Popov",
   "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/andrewpopov/webhook-kit.git" },
+  "bugs": { "url": "https://github.com/andrewpopov/webhook-kit/issues" },
+  "homepage": "https://github.com/andrewpopov/webhook-kit#readme",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -24,11 +27,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify:pack": "node scripts/verify-pack.mjs"
+    "verify:pack": "node scripts/verify-pack.mjs",
+    "verify": "npm run typecheck && npm test && npm run build && npm run verify:pack"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "typescript": "^5.5.0",
-    "vitest": "^2.1.0"
+    "vitest": "^4.1.10"
   }
 }

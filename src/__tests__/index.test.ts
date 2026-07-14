@@ -5,12 +5,16 @@ import {
   resolveSecretRotation,
   matchesEvent,
   signWebhookBody,
+  signWebhookDelivery,
   buildSignedHeaders,
   verifyWebhookSignature,
+  verifyWebhookDelivery,
   deliverWebhook,
+  deliverWebhookUnsafe,
   deliverWebhooks,
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
+  DELIVERY_ID_HEADER,
 } from '../index';
 
 describe('generateWebhookSecret', () => {
@@ -55,11 +59,13 @@ describe('signWebhookBody', () => {
 });
 
 describe('buildSignedHeaders', () => {
-  it('emits signature + timestamp headers when a secret is present', () => {
-    const { headers, timestamp } = buildSignedHeaders('sec', '{}', { now: () => 1700000000_000 });
+  it('emits a delivery-id-bound signature, timestamp, and id when a secret is present', () => {
+    const { headers, timestamp, deliveryId } = buildSignedHeaders('sec', '{}', { now: () => 1700000000_000, deliveryId: 'delivery-1' });
     expect(timestamp).toBe('1700000000');
     expect(headers[TIMESTAMP_HEADER]).toBe('1700000000');
-    expect(headers[SIGNATURE_HEADER]).toBe(signWebhookBody('sec', '1700000000', '{}'));
+    expect(deliveryId).toBe('delivery-1');
+    expect(headers[DELIVERY_ID_HEADER]).toBe('delivery-1');
+    expect(headers[SIGNATURE_HEADER]).toBe(signWebhookDelivery('sec', '1700000000', 'delivery-1', '{}'));
     expect(headers['Content-Type']).toBe('application/json');
   });
   it('omits signature headers when no secret', () => {
@@ -82,6 +88,7 @@ describe('verifyWebhookSignature (receiver side)', () => {
         rawBody: body,
         signatureHeader: headers[SIGNATURE_HEADER],
         timestampHeader: headers[TIMESTAMP_HEADER],
+        deliveryIdHeader: headers[DELIVERY_ID_HEADER],
         now,
       }),
     ).toBe(true);
@@ -96,6 +103,7 @@ describe('verifyWebhookSignature (receiver side)', () => {
         rawBody: body + 'x',
         signatureHeader: headers[SIGNATURE_HEADER],
         timestampHeader: headers[TIMESTAMP_HEADER],
+        deliveryIdHeader: headers[DELIVERY_ID_HEADER],
         now,
       }),
     ).toBe(false);
@@ -111,6 +119,7 @@ describe('verifyWebhookSignature (receiver side)', () => {
         rawBody: body,
         signatureHeader: headers[SIGNATURE_HEADER],
         timestampHeader: headers[TIMESTAMP_HEADER],
+        deliveryIdHeader: headers[DELIVERY_ID_HEADER],
         toleranceSec: 300,
         now: () => 1700000000_000 + 600_000,
       }),
@@ -132,9 +141,32 @@ describe('verifyWebhookSignature (receiver side)', () => {
         rawBody: body,
         signatureHeader: headers[SIGNATURE_HEADER],
         timestampHeader: headers[TIMESTAMP_HEADER],
+        deliveryIdHeader: headers[DELIVERY_ID_HEADER],
         now,
       }),
     ).toBe(false);
+  });
+
+  it('rejects a replay inside the timestamp tolerance through an atomic replay store', async () => {
+    const now = () => 1700000000_000;
+    const { headers } = buildSignedHeaders(secret, body, { now, deliveryId: 'delivery-1' });
+    const claimed = new Set<string>();
+    const replayStore = { claim: async (id: string) => {
+      if (claimed.has(id)) return false;
+      claimed.add(id);
+      return true;
+    } };
+    const params = {
+      secret,
+      rawBody: body,
+      signatureHeader: headers[SIGNATURE_HEADER],
+      timestampHeader: headers[TIMESTAMP_HEADER],
+      deliveryIdHeader: headers[DELIVERY_ID_HEADER],
+      replayStore,
+      now,
+    };
+    await expect(verifyWebhookDelivery(params)).resolves.toBe(true);
+    await expect(verifyWebhookDelivery(params)).resolves.toBe(false);
   });
 });
 
@@ -149,15 +181,16 @@ describe('deliverWebhook', () => {
     const res = await deliverWebhook(
       { url: 'https://example.com/hook', secret: 'sec', id: 'w1' },
       '{"x":1}',
-      { fetchImpl, now: () => 1700000000_000 },
+      { fetchImpl, now: () => 1700000000_000, assertSafeUrl: () => undefined },
     );
 
-    expect(res).toMatchObject({ url: 'https://example.com/hook', id: 'w1', ok: true, status: 200 });
+    expect(res).toMatchObject({ url: 'https://example.com/hook', id: 'w1', deliveryId: expect.any(String), ok: true, status: 200 });
     const [, init] = calls[0];
     expect(init.method).toBe('POST');
     expect(init.redirect).toBe('manual');
     const h = init.headers as Record<string, string>;
-    expect(h[SIGNATURE_HEADER]).toBe(signWebhookBody('sec', '1700000000', '{"x":1}'));
+    expect(h[DELIVERY_ID_HEADER]).toBe(res.deliveryId);
+    expect(h[SIGNATURE_HEADER]).toBe(signWebhookDelivery('sec', '1700000000', res.deliveryId!, '{"x":1}'));
     expect(h[TIMESTAMP_HEADER]).toBe('1700000000');
   });
 
@@ -175,10 +208,47 @@ describe('deliverWebhook', () => {
 
   it('never throws on transport failure — returns the error', async () => {
     const fetchImpl = vi.fn(async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch;
-    const res = await deliverWebhook({ url: 'https://down.example', secret: 'sec' }, '{}', { fetchImpl });
+    const res = await deliverWebhook({ url: 'https://down.example', secret: 'sec' }, '{}', {
+      fetchImpl,
+      assertSafeUrl: () => undefined,
+    });
     expect(res.ok).toBe(false);
     expect(res.skipped).toBeUndefined();
     expect(res.error?.message).toBe('ECONNREFUSED');
+  });
+
+  it('fails closed when a signing secret or URL guard is missing', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const unsigned = await deliverWebhook({ url: 'https://example.com/hook' }, '{}', {
+      fetchImpl,
+      assertSafeUrl: () => undefined,
+    });
+    const unguarded = await deliverWebhook({ url: 'https://example.com/hook', secret: 'sec' }, '{}', {
+      fetchImpl,
+      // JavaScript callers can still omit the compile-time-required property.
+      assertSafeUrl: undefined as unknown as (url: string) => unknown,
+    });
+    expect(unsigned.error?.message).toBe('Webhook signing secret is required');
+    expect(unguarded.error?.message).toBe('Webhook URL guard is required');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('keeps unsigned or unguarded delivery behind an explicit unsafe API', async () => {
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 202 })) as unknown as typeof fetch;
+    const result = await deliverWebhookUnsafe({ url: 'https://example.com/hook' }, '{}', { fetchImpl });
+    expect(result).toMatchObject({ ok: true, status: 202 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('redacts credentials and query strings from results and guard errors', async () => {
+    const result = await deliverWebhook(
+      { url: 'https://user:secret@example.com/hook?token=leak', secret: 'sec' },
+      '{}',
+      { assertSafeUrl: () => { throw new Error('blocked https://user:secret@example.com/hook?token=leak'); } },
+    );
+    expect(result.url).toBe('https://example.com/hook');
+    expect(result.error?.message).not.toContain('secret');
+    expect(result.error?.message).not.toContain('token=leak');
   });
 });
 
@@ -191,10 +261,26 @@ describe('deliverWebhooks', () => {
         { url: 'https://b.example/h', secret: 's2' },
       ],
       '{}',
-      { fetchImpl },
+      { fetchImpl, assertSafeUrl: () => undefined },
     );
     expect(results).toHaveLength(2);
     expect(results.every((r) => r.ok && r.status === 202)).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('limits concurrent deliveries while retaining input order', async () => {
+    let active = 0;
+    let peak = 0;
+    const fetchImpl = vi.fn(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return new Response('{}', { status: 202 });
+    }) as unknown as typeof fetch;
+    const targets = Array.from({ length: 5 }, (_, index) => ({ url: `https://${index}.example/h`, secret: 'sec', id: `${index}` }));
+    const results = await deliverWebhooks(targets, '{}', { fetchImpl, assertSafeUrl: () => undefined, concurrency: 2 });
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(results.map((result) => result.id)).toEqual(['0', '1', '2', '3', '4']);
   });
 });
