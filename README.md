@@ -20,7 +20,7 @@ Zero runtime dependencies — Node `crypto` and the global `fetch` (Node ≥ 20)
 ## Install
 
 ```
-npm install github:andrewpopov/webhook-kit#v1.0.0
+npm install github:andrewpopov/webhook-kit#v1.0.1
 ```
 
 ## Sending
