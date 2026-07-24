@@ -2,16 +2,9 @@
 
 ## 1.0.1
 
-- Add public contribution, support, and private vulnerability-reporting policies.
-- Bind all newly sent webhook signatures to a unique `X-Webhook-Delivery-Id`.
-- Add `verifyWebhookDelivery`, which validates the delivery signature/freshness
-  and invokes a consumer-provided atomic replay-store claim. A duplicate ID is
-  rejected within the freshness window.
-- Keep `signWebhookBody` / `verifyWebhookSignature` for legacy protocol
-  compatibility, explicitly without replay protection.
-- Upgrade the Vitest development toolchain to a version with no known advisories.
-
-## 1.0.0
+The first tagged `1.x` release. `1.0.0` was never published as a separate
+version — the package went from `0.1.2` straight to `1.0.1`, so the changes
+once listed under `1.0.0` shipped here and are consolidated into this entry.
 
 **Breaking security release.** `deliverWebhook` and `deliverWebhooks` now require
 both a non-empty target secret and an `assertSafeUrl` callback. A missing control
@@ -25,6 +18,14 @@ available only as explicitly named `deliverWebhookUnsafe` for migration.
 - Correct receiver documentation: timestamp freshness alone does not stop a
   captured request from being replayed within its tolerance window.
 - Add `npm run verify` for the local release gate.
+- Bind all newly sent webhook signatures to a unique `X-Webhook-Delivery-Id`.
+- Add `verifyWebhookDelivery`, which validates the delivery signature/freshness
+  and invokes a consumer-provided atomic replay-store claim. A duplicate ID is
+  rejected within the freshness window.
+- Keep `signWebhookBody` / `verifyWebhookSignature` for legacy protocol
+  compatibility, explicitly without replay protection.
+- Upgrade the Vitest development toolchain to a version with no known advisories.
+- Add public contribution, support, and private vulnerability-reporting policies.
 
 ## 0.1.2
 
