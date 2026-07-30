@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.2
+
+- Manage releases with release-kit (fragment-based CHANGELOG + version bump)
+  Releases are now driven by release-kit: describe each change as a fragment under `.changes/unreleased/` and run `npm run release:cut` to compile them into a new CHANGELOG section, bump the version, and archive the fragments.
+
 ## 1.0.1
 
 The first tagged `1.x` release. `1.0.0` was never published as a separate
