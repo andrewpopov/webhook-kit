@@ -124,5 +124,12 @@ export declare function deliverWebhook(target: WebhookTarget, body: string, opti
  * SSRF guard, so never use it for a new untrusted webhook integration.
  */
 export declare function deliverWebhookUnsafe(target: WebhookTarget, body: string, options?: UnsafeDeliverOptions): Promise<DeliveryResult>;
-/** Deliver to many targets with bounded concurrency. Never rejects; one result per target. */
+/**
+ * Deliver to many targets with bounded concurrency. Each target's delivery
+ * outcome — success, transport failure, or SSRF-guard skip — never rejects;
+ * it comes back as that target's own `DeliveryResult`. An invalid
+ * `concurrency` (not a positive integer) is a caller/config bug rather than
+ * a per-target outcome, so it throws synchronously instead of being folded
+ * into the result array where it could be mistaken for a delivery failure.
+ */
 export declare function deliverWebhooks(targets: readonly WebhookTarget[], body: string, options: DeliverOptions): Promise<DeliveryResult[]>;

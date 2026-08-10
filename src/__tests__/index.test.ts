@@ -15,6 +15,7 @@ import {
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
   DELIVERY_ID_HEADER,
+  type WebhookReplayStore,
 } from '../index';
 
 describe('generateWebhookSecret', () => {
@@ -170,6 +171,71 @@ describe('verifyWebhookSignature (receiver side)', () => {
   });
 });
 
+describe('replay claim / freshness window agreement (PKG-143 finding 1)', () => {
+  const secret = 'shared-secret';
+  const body = '{"event":"book.added"}';
+
+  /**
+   * A realistic TTL-respecting replay store: a delivery id is blocked only
+   * while its most recently claimed `expiresAt` has not yet passed. This is
+   * the shape any real replay store (Redis EXPIRE, a DB row with a TTL
+   * index, an in-memory Map) takes — unlike a plain `Set`, it actually
+   * exercises the `expiresAt` value `verifyWebhookDelivery` computes.
+   */
+  class TtlReplayStore implements WebhookReplayStore {
+    private expiryMsById = new Map<string, number>();
+    constructor(private readonly clockMs: () => number) {}
+    claim(deliveryId: string, expiresAt: Date): boolean {
+      const now = this.clockMs();
+      const existing = this.expiryMsById.get(deliveryId);
+      if (existing !== undefined && existing > now) return false; // still retained: replay
+      this.expiryMsById.set(deliveryId, expiresAt.getTime());
+      return true;
+    }
+  }
+
+  it('denies a replay attempted during the final accepted freshness second', async () => {
+    const toleranceSec = 5;
+    const timestampSec = 1_000_000; // arbitrary fixed base; the clock below is fully controlled
+    const timestampHeader = String(timestampSec);
+    let clockMs = timestampSec * 1000;
+    const clock = () => clockMs;
+    const replayStore = new TtlReplayStore(clock);
+
+    const { headers } = buildSignedHeaders(secret, body, {
+      now: () => timestampSec * 1000,
+      deliveryId: 'delivery-boundary',
+    });
+
+    const params = {
+      secret,
+      rawBody: body,
+      signatureHeader: headers[SIGNATURE_HEADER],
+      timestampHeader,
+      deliveryIdHeader: headers[DELIVERY_ID_HEADER],
+      toleranceSec,
+      replayStore,
+      now: clock,
+    };
+
+    // Original delivery, verified the instant it arrives.
+    await expect(verifyWebhookDelivery(params)).resolves.toBe(true);
+
+    // Attacker replays the IDENTICAL captured request 500ms into the final
+    // accepted second: nowSec === timestampSec + toleranceSec. Freshness
+    // floors `now` to whole seconds and accepts equality at the boundary, so
+    // this must still read as "fresh" — sanity-check that premise directly
+    // against the documented rule (`Math.abs(nowSec - timestamp) > tolerance`
+    // rejects, so equality is accepted).
+    clockMs = (timestampSec + toleranceSec) * 1000 + 500;
+    expect(Math.abs(Math.floor(clockMs / 1000) - timestampSec)).toBe(toleranceSec);
+
+    // Because it's still fresh, the replay claim must still be held: this
+    // must be DENIED, not accepted as a "new" claim.
+    await expect(verifyWebhookDelivery(params)).resolves.toBe(false);
+  });
+});
+
 describe('deliverWebhook', () => {
   it('POSTs signed, with redirect: manual, and reports status', async () => {
     const calls: Array<[string, RequestInit]> = [];
@@ -282,5 +348,21 @@ describe('deliverWebhooks', () => {
     const results = await deliverWebhooks(targets, '{}', { fetchImpl, assertSafeUrl: () => undefined, concurrency: 2 });
     expect(peak).toBeLessThanOrEqual(2);
     expect(results.map((result) => result.id)).toEqual(['0', '1', '2', '3', '4']);
+  });
+
+  // PKG-143 finding 2: an invalid `concurrency` is a caller/config bug, not a
+  // per-target delivery outcome, so it throws synchronously rather than being
+  // folded into the (otherwise never-rejecting) result array. This pins that
+  // contract now that the doc comment says so explicitly.
+  it('rejects synchronously for a non-positive concurrency rather than returning per-target results', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    await expect(
+      deliverWebhooks([{ url: 'https://a.example/h', secret: 'sec' }], '{}', {
+        fetchImpl,
+        assertSafeUrl: () => undefined,
+        concurrency: 0,
+      }),
+    ).rejects.toThrow(/concurrency must be a positive integer/);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

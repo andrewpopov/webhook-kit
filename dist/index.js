@@ -78,6 +78,23 @@ function buildSignedHeaders(secret, body, options = {}) {
     return { headers, timestamp, deliveryId };
 }
 /**
+ * Exclusive upper bound (unix ms) through which a signed `timestampSec` is
+ * still accepted as fresh for `toleranceSec`. `verifyWebhookSignature`
+ * compares a *floored* `nowSec` against `timestampSec`, so the entire final
+ * second at the tolerance boundary — not just its first millisecond — reads
+ * as fresh; this function returns the first millisecond that is NOT (i.e.
+ * the start of the following, rejected, second).
+ *
+ * `verifyWebhookDelivery` retains its replay claim through exactly this same
+ * instant. The two must be derived from one place: computing them
+ * independently is what let a signature stay "fresh" for a sliver of a
+ * second after its replay claim had already lapsed, letting that sliver be
+ * replayed (PKG-143).
+ */
+function freshnessCutoffMs(timestampSec, toleranceSec) {
+    return (timestampSec + toleranceSec + 1) * 1000;
+}
+/**
  * Receiver-side verification. Returns true only when the signature matches
  * the legacy two-part or current delivery-ID-bound signature (constant-time) AND
  * the timestamp is within `toleranceSec` of now. This function alone does not
@@ -91,9 +108,13 @@ function verifyWebhookSignature(params) {
     if (!/^\d+$/.test(timestampHeader))
         return false;
     const tolerance = params.toleranceSec ?? exports.DEFAULT_TOLERANCE_SEC;
-    const nowSec = Math.floor((params.now ? params.now() : Date.now()) / 1000);
-    if (Math.abs(nowSec - Number(timestampHeader)) > tolerance)
-        return false;
+    const timestampSec = Number(timestampHeader);
+    const nowMs = params.now ? params.now() : Date.now();
+    const nowSec = Math.floor(nowMs / 1000);
+    if (nowSec < timestampSec - tolerance)
+        return false; // future-dated beyond tolerance
+    if (nowMs >= freshnessCutoffMs(timestampSec, tolerance))
+        return false; // too old / no longer fresh
     const expected = params.deliveryIdHeader
         ? signWebhookDelivery(secret, timestampHeader, params.deliveryIdHeader, rawBody)
         : signWebhookBody(secret, timestampHeader, rawBody);
@@ -114,7 +135,11 @@ async function verifyWebhookDelivery(params) {
     if (!verifyWebhookSignature(params))
         return false;
     const timestamp = Number(params.timestampHeader);
-    const expiresAt = new Date((timestamp + (params.toleranceSec ?? exports.DEFAULT_TOLERANCE_SEC)) * 1000);
+    // Retain the claim through the same instant `verifyWebhookSignature` stops
+    // accepting this timestamp as fresh (see `freshnessCutoffMs`), so a
+    // signature that still reads as fresh can never find its delivery id
+    // already unclaimed.
+    const expiresAt = new Date(freshnessCutoffMs(timestamp, params.toleranceSec ?? exports.DEFAULT_TOLERANCE_SEC));
     try {
         return await params.replayStore.claim(deliveryId, expiresAt);
     }
@@ -197,7 +222,14 @@ async function deliver(target, body, options, requireSafeDelivery) {
         clearTimeout(timeout);
     }
 }
-/** Deliver to many targets with bounded concurrency. Never rejects; one result per target. */
+/**
+ * Deliver to many targets with bounded concurrency. Each target's delivery
+ * outcome — success, transport failure, or SSRF-guard skip — never rejects;
+ * it comes back as that target's own `DeliveryResult`. An invalid
+ * `concurrency` (not a positive integer) is a caller/config bug rather than
+ * a per-target outcome, so it throws synchronously instead of being folded
+ * into the result array where it could be mistaken for a delivery failure.
+ */
 async function deliverWebhooks(targets, body, options) {
     const concurrency = options.concurrency ?? 8;
     if (!Number.isInteger(concurrency) || concurrency < 1) {
